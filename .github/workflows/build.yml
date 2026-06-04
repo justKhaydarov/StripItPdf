@@ -1,0 +1,116 @@
+# Build StripItPdf on all three desktop platforms and publish a GitHub Release
+# with the downloads.  Pushing a version tag (e.g. v1.0.0) builds Windows,
+# macOS and Linux on their native runners and attaches the artifacts to the
+# release — the only realistic way to produce a Windows .exe / macOS .app, since
+# they cannot be cross-compiled from Linux.
+name: build
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  # ----------------------------------------------------------------- Linux
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Qt6 + MuPDF dev
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake g++ qt6-base-dev \
+            libmupdf-dev libfreetype-dev libharfbuzz-dev libjbig2dec0-dev \
+            libopenjp2-7-dev libjpeg-turbo8-dev libmujs-dev libgumbo-dev zlib1g-dev
+      - name: Build
+        run: cmake -S app -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
+      - name: Package (.deb + tarball)
+        run: |
+          VER="${GITHUB_REF_NAME#v}"; [ "$VER" = "$GITHUB_REF_NAME" ] && VER=1.0.0
+          PHX_BIN=build/stripitpdf packaging/make_deb.sh "$VER"
+          PHX_BIN=build/stripitpdf packaging/make_tarball.sh "$VER"
+      - uses: actions/upload-artifact@v4
+        with: { name: dist-linux, path: packaging/dist/* }
+
+  # --------------------------------------------------------------- Windows
+  # MSYS2 ships both Qt6 and MuPDF for mingw-w64, so the same CMake build works.
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            zip mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-qt6-base mingw-w64-x86_64-mupdf
+      - name: Build
+        run: cmake -S app -B build -G Ninja -DCMAKE_BUILD_TYPE=Release && cmake --build build -j
+      - name: Bundle (windeployqt) + zip
+        run: |
+          VER="${GITHUB_REF_NAME#v}"; [ "$VER" = "$GITHUB_REF_NAME" ] && VER=1.0.0
+          mkdir -p dist/StripItPdf
+          cp build/stripitpdf.exe dist/StripItPdf/
+          /mingw64/bin/windeployqt6.exe --release --no-translations dist/StripItPdf/stripitpdf.exe
+          # copy the extra mingw/mupdf runtime DLLs the exe needs
+          ldd dist/StripItPdf/stripitpdf.exe | grep -i mingw64 | awk '{print $3}' | xargs -I{} cp -u {} dist/StripItPdf/ || true
+          (cd dist && zip -r "../stripitpdf-$VER-windows-x64.zip" StripItPdf)
+      - uses: actions/upload-artifact@v4
+        with: { name: dist-windows, path: stripitpdf-*-windows-x64.zip }
+
+  # ----------------------------------------------------------------- macOS
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Qt6 + MuPDF
+        run: brew install qt@6 mupdf cmake
+      - name: Build (.app)
+        run: |
+          cmake -S app -B build -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH="$(brew --prefix qt@6);$(brew --prefix mupdf)"
+          cmake --build build -j
+      - name: Bundle (macdeployqt) + zip
+        run: |
+          VER="${GITHUB_REF_NAME#v}"; [ "$VER" = "$GITHUB_REF_NAME" ] && VER=1.0.0
+          "$(brew --prefix qt@6)/bin/macdeployqt" build/stripitpdf.app
+          ditto -c -k --keepParent build/stripitpdf.app "stripitpdf-$VER-macos.zip"
+      - uses: actions/upload-artifact@v4
+        with: { name: dist-macos, path: stripitpdf-*-macos.zip }
+
+  # --------------------------------------------------- publish the release
+  # Runs after all three (even if one fails) and attaches whatever built.
+  release:
+    needs: [linux, windows, macos]
+    if: always() && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions: { contents: write }
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: dist, merge-multiple: true }
+      - run: ls -laR dist
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          # If you add a personal access token as a secret named RELEASE_TOKEN,
+          # the release is published under your account; otherwise github-actions.
+          token: ${{ secrets.RELEASE_TOKEN || github.token }}
+          name: StripItPdf ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          make_latest: true
+          fail_on_unmatched_files: false
+          files: dist/*
+          body: |
+            **StripItPdf ${{ github.ref_name }}** — remove watermark layers from PDFs, keep the content & real text.
+
+            ### Downloads
+            | OS | File |
+            |---|---|
+            | Windows | `stripitpdf-*-windows-x64.zip` — unzip, run `stripitpdf.exe` |
+            | macOS | `stripitpdf-*-macos.zip` — unzip, drag to Applications (first launch: right-click → Open) |
+            | Debian/Ubuntu | `stripitpdf_*_amd64.deb` — `sudo apt install ./stripitpdf_*.deb` |
+            | Other Linux | `stripitpdf-*-linux-x86_64.tar.gz` — needs the Qt6 runtime |

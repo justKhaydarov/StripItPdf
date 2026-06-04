@@ -1,0 +1,12 @@
+<!DOCTYPE RCC><RCC version="1.0">
+<qresource prefix="/">
+    <file>style.qss</file>
+    <file>logo.png</file>
+    <file>fonts/Outfit.ttf</file>
+    <file>fonts/PlusJakartaSans.ttf</file>
+    <file>icons/check_on.png</file>
+    <file>icons/check_off.png</file>
+    <file>icons/check_on@2x.png</file>
+    <file>icons/check_off@2x.png</file>
+</qresource>
+</RCC>

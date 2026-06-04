@@ -1,0 +1,19 @@
+# build artifacts
+app/build/
+build/
+packaging/build/
+packaging/dist/
+*.o
+*_stripped.pdf
+*_cleaned.pdf
+*_cpp.pdf
+
+# bootstrapped local SDK (regenerate with scripts/bootstrap_sdk.sh)
+.sdk/
+
+# python
+.venv/
+__pycache__/
+
+# editor scratch
+_*.png
